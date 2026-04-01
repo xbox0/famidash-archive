@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Famidash Builds</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+
+        #container {
+            padding: 20px;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        #build-list {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        .build-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            border-bottom: 1px solid #ccc;
+            cursor: pointer;
+        }
+
+        .build-info {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .build-row:hover {
+            background-color: #f0f0f0;
+        }
+
+        #commit-info {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        #page-info {
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .pagination button {
+            padding: 10px;
+            margin: 0 5px;
+            cursor: pointer;
+        }
+
+        .pagination button:disabled {
+            background-color: #ddd;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <h1>Famidash Builds</h1>
+
+    <!-- Build List -->
+    <ul id="build-list"></ul>
+
+    <!-- Page Info -->
+    <div id="page-info"></div>
+
+    <!-- Pagination -->
+    <div class="pagination">
+        <button id="prev-page">Previous</button>
+        <button id="next-page">Next</button>
+    </div>
+
+    <!-- Commit Info -->
+    <div id="commit-info"></div>
+</div>
+
+<script>
+// Variables
+const buildsPerPage = 10;
+let currentPage = 1;
+let allBuilds = [];
+let romFiles = [];
+
+const RAW_INFO_URL = "https://raw.githubusercontent.com/xbox0/famidash-archive-info/main/info.ini";
+const GITHUB_CONTENT_URL = "https://api.github.com/repos/xbox0/famidash-archive-info/contents";
+
+// Extract commit/hash from the URL
+function extractCommitFromUrl(url) {
+    if (!url || url === '#') return '-';
+    const filename = url.split('/').pop();
+    if (!filename.endsWith('.nes')) return '-';
+    const nameWithoutExt = filename.slice(0, -4); // remove .nes
+    const segments = nameWithoutExt.split('.');
+    return segments[segments.length - 1] || '-'; // last segment as commit/hash
+}
+
+// Fetch ROM filenames from GitHub
+async function fetchRomFiles() {
+    const res = await fetch(GITHUB_CONTENT_URL);
+    const files = await res.json();
+    romFiles = files.filter(f => f.name.endsWith('.nes')).map(f => f.name);
+}
+
+// Fetch and parse the info.ini, then assign ROMs
+async function fetchBuilds() {
+    await fetchRomFiles();
+
+    const res = await fetch(RAW_INFO_URL);
+    const text = await res.text();
+
+    const lines = text.split('\n');
+    let currentEntry = null;
+    allBuilds = [];
+
+    for (let line of lines) {
+        line = line.trim();
+        if (!line || line.startsWith('#')) continue;
+
+        const sectionMatch = line.match(/^\[(.+?)\]$/);
+        if (sectionMatch) {
+            if (currentEntry) allBuilds.push(currentEntry);
+            currentEntry = { title: sectionMatch[1] };
+            continue;
+        }
+
+        const kv = line.split('=');
+        if (kv.length === 2 && currentEntry) {
+            const key = kv[0].trim();
+            const value = kv[1].trim().replace(/^"|"$/g, '');
+            currentEntry[key] = value;
+        }
+    }
+
+    if (currentEntry) allBuilds.push(currentEntry);
+
+    // Assign ROMs to each build, considering the UV3 logic
+    const assignedRoms = new Set();
+    allBuilds = allBuilds.map(entry => {
+        let matched = null;
+
+        // UV3 builds are identified by value3 in the filename
+        if (entry.uv3 === 'true') {
+            const value3 = entry.title.split(' ')[0]; // Assuming the first part of the title corresponds to value1
+            // Match by value3 (third part) in the filename
+            matched = romFiles.find(f => f.includes(`famidash.${value3}.`) && !assignedRoms.has(f));
+        } else {
+            // For non-UV3 builds, match by value1 (first part of the title)
+            const value1 = entry.title.split(' ')[0]; // Assuming the first part of the title corresponds to value1
+            matched = romFiles.find(f => f.startsWith(`${value1}.famidash.`) && !assignedRoms.has(f));
+        }
+
+        if (matched) assignedRoms.add(matched);
+
+        const url = matched ? `https://raw.githubusercontent.com/xbox0/famidash-archive-info/main/${matched}` : '#';
+
+        return {
+            display_name: entry.display_name || entry.title,
+            date: entry.date || '-',
+            url: url,
+            commit: extractCommitFromUrl(url),
+            commit_info: entry.commit_name || 'No commit information available',
+            identifier: entry.title || 'No identifier'
+        };
+    });
+
+    renderPage(currentPage);
+}
+
+// Render builds on the current page
+function renderPage(page) {
+    const list = document.getElementById('build-list');
+    list.innerHTML = '';
+    const start = (page - 1) * buildsPerPage;
+    const end = start + buildsPerPage;
+    const pageBuilds = allBuilds.slice(start, end);
+
+    pageBuilds.forEach(build => {
+        const li = document.createElement('li');
+        li.className = 'build-row';
+
+        const info = document.createElement('div');
+        info.className = 'build-info';
+
+        const name = document.createElement('span');
+        name.textContent = build.display_name;
+        const date = document.createElement('span');
+        date.textContent = build.date;
+        const commit = document.createElement('span');
+        commit.textContent = build.commit;
+        const identifier = document.createElement('span');
+        identifier.textContent = `Identifier: ${build.identifier}`;
+
+        // Create a download button
+        const downloadBtn = document.createElement('button');
+        downloadBtn.textContent = "Download";
+        downloadBtn.onclick = () => window.open(build.url, '_blank');
+
+        li.addEventListener('click', () => showCommitInfo(build));
+
+        info.appendChild(name);
+        info.appendChild(date);
+        info.appendChild(commit);
+        info.appendChild(identifier);
+        li.appendChild(info);
+        li.appendChild(downloadBtn);
+        list.appendChild(li);
+    });
+
+    document.getElementById("page-info").textContent = `Page ${currentPage} of ${Math.ceil(allBuilds.length / buildsPerPage)}`;
+}
+
+// Show commit info below the list
+function showCommitInfo(build) {
+    const commitInfoDiv = document.getElementById('commit-info');
+    commitInfoDiv.innerHTML = `
+        <h3>Commit Info:</h3>
+        <p><strong>Build Name:</strong> ${build.display_name}</p>
+        <p><strong>Date:</strong> ${build.date}</p>
+        <p><strong>Commit:</strong> ${build.commit}</p>
+        <p><strong>Commit Info:</strong> ${build.commit_info}</p>
+    `;
+}
+
+// Pagination controls
+document.getElementById('prev-page').addEventListener('click', () => {
+    if (currentPage > 1) {
+        currentPage--;
+        renderPage(currentPage);
+    }
+});
+
+document.getElementById('next-page').addEventListener('click', () => {
+    if (currentPage < Math.ceil(allBuilds.length / buildsPerPage)) {
+        currentPage++;
+        renderPage(currentPage);
+    }
+});
+
+// Fetch builds when the page loads
+fetchBuilds();
+</script>
+
+</body>
+</html>
